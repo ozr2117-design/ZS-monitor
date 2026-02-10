@@ -69,15 +69,24 @@ def get_realtime_data():
         print(f"Data Fetch Error: {e}")
         return None
 
+def is_trading_time(dt):
+    if dt.weekday() >= 5: return False
+    current_time = dt.time()
+    return (datetime.strptime("09:30", "%H:%M").time() <= current_time <= datetime.strptime("11:30", "%H:%M").time()) or \
+           (datetime.strptime("13:00", "%H:%M").time() <= current_time <= datetime.strptime("15:00", "%H:%M").time())
+
 def main():
     print("Starting check...")
     # 获取北京时间
     utc_now = datetime.utcnow()
     bj_now = utc_now + timedelta(hours=8)
     
-    # 简单的交易时间过滤 (9:00 - 15:30)
-    # GitHub Action 调度可能不准，这里再做一层检查也可以，或者主要依赖 Cron
+    # 交易时间过滤 (9:30 - 11:30, 13:00 - 15:00)
     print(f"Time (BJ): {bj_now}")
+    
+    if not is_trading_time(bj_now):
+        print("Market Closed. Spending time detecting if I should sleep...")
+        return
 
     data = get_realtime_data()
     if data and 'A' in data and 'B' in data:

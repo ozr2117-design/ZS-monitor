@@ -91,6 +91,25 @@ with st.sidebar:
     st.info("数据来源：新浪财经 (延迟约3秒)")
     st.caption(f"报警冷却: {ALERT_COOLDOWN}秒")
 
+# --- 辅助函数 ---
+def is_trading_time(dt):
+    """
+    判断是否在A股交易时间
+    上午: 09:30 - 11:30
+    下午: 13:00 - 15:00
+    """
+    # 周末不交易
+    if dt.weekday() >= 5: return False
+    
+    current_time = dt.time()
+    morning_start = datetime.strptime("09:30", "%H:%M").time()
+    morning_end = datetime.strptime("11:30", "%H:%M").time()
+    afternoon_start = datetime.strptime("13:00", "%H:%M").time()
+    afternoon_end = datetime.strptime("15:00", "%H:%M").time()
+
+    return (morning_start <= current_time <= morning_end) or \
+           (afternoon_start <= current_time <= afternoon_end)
+
 # --- 主界面 ---
 st.title("📈 银行股配对监控")
 
@@ -99,16 +118,23 @@ main_container = st.empty()
 
 while True:
     # 获取北京时间 (云服务器通常是UTC，需要+8小时)
-    now_time = (datetime.utcnow() + timedelta(hours=8)).strftime("%H:%M:%S")
+    now_dt = datetime.utcnow() + timedelta(hours=8)
+    now_time_str = now_dt.strftime("%H:%M:%S")
 
-    data = get_realtime_data()
+    # 交易时间检查
+    if is_trading_time(now_dt):
+        status_text = f"最后更新时间: {now_time_str}"
+        data = get_realtime_data()
+    else:
+        status_text = f"最后更新时间: {now_time_str} (😴 休息中)"
+        data = None
 
     with main_container.container():
+        # 1. 顶部状态栏
+        st.caption(status_text)
+
         if data and 'A' in data and 'B' in data:
             spread = data['A']['pct'] - data['B']['pct']
-
-            # 1. 顶部状态栏
-            st.caption(f"最后更新时间: {now_time}")
 
             # 2. 核心指标卡片 (三列布局)
             col1, col2, col3 = st.columns(3)
@@ -170,6 +196,8 @@ while True:
                 })
                 st.bar_chart(chart_data.set_index('股票名称'))
 
+        elif not is_trading_time(now_dt):
+            st.info("😴 当前非交易时间，暂停数据更新")
         else:
             st.warning("正在连接行情数据...")
 
@@ -177,5 +205,6 @@ while True:
     if not auto_refresh:
         break
 
-    # 暂停等待下一次刷新
-    time.sleep(REFRESH_RATE)
+    # 休市期间休眠更久 (60秒)，交易时间正常刷新
+    sleep_time = 60 if not is_trading_time(now_dt) else REFRESH_RATE
+    time.sleep(sleep_time)
