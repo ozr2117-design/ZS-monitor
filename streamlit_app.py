@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import time
+import os
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -13,10 +14,49 @@ STOCK_B_NAME = "宁波银行"
 
 SPREAD_THRESHOLD = 1.0 # 报警阈值 1%
 REFRESH_RATE = 3       # 刷新间隔 (秒)
+ALERT_COOLDOWN = 300   # 报警冷却时间 (秒)
 # ===========================================
 
 # 设置页面标题和布局
 st.set_page_config(page_title="配对交易监控", page_icon="📈", layout="centered")
+
+# --- 初始化 Session State ---
+if 'last_alert_time' not in st.session_state:
+    st.session_state.last_alert_time = 0
+
+# --- 通知功能 ---
+def load_secrets():
+    # 优先从 Streamlit Secrets 读取，其次环境变量
+    bark = st.secrets.get("BARK_KEY") if "BARK_KEY" in st.secrets else os.environ.get("BARK_KEY")
+    pp = st.secrets.get("PUSHPLUS_TOKEN") if "PUSHPLUS_TOKEN" in st.secrets else os.environ.get("PUSHPLUS_TOKEN")
+    return bark, pp
+
+def send_notification(title, content):
+    bark_key, pp_token = load_secrets()
+    
+    # 1. Bark 推送
+    if bark_key:
+        try:
+            base_url = bark_key if bark_key.startswith("http") else f"https://api.day.app/{bark_key}/"
+            clean_url = base_url.rstrip('/')
+            # URL Encode 可能需要，这里简单处理
+            requests.get(f"{clean_url}/{title}/{content}?group=stock_monitor", timeout=5)
+        except Exception as e:
+            st.error(f"Bark 推送失败: {e}")
+
+    # 2. PushPlus 推送
+    if pp_token:
+        try:
+            pp_url = "http://www.pushplus.plus/send"
+            pp_data = {
+                "token": pp_token,
+                "title": title,
+                "content": content.replace("\n", "<br>"), 
+                "template": "html"
+            }
+            requests.post(pp_url, json=pp_data, timeout=5)
+        except Exception as e:
+            st.error(f"PushPlus 推送失败: {e}")
 
 # 定义获取数据的函数
 def get_realtime_data():
@@ -49,6 +89,7 @@ with st.sidebar:
     threshold = st.slider("报警阈值 (%)", 0.5, 3.0, 1.0, 0.1)
     auto_refresh = st.checkbox("开启自动刷新", value=True)
     st.info("数据来源：新浪财经 (延迟约3秒)")
+    st.caption(f"报警冷却: {ALERT_COOLDOWN}秒")
 
 # --- 主界面 ---
 st.title("📈 银行股配对监控")
@@ -81,7 +122,6 @@ while True:
 
             with col2:
                 # 价差卡片
-                # 使用自定义逻辑判断颜色，因此这里delta_color设为off
                 st.metric(
                     label="当前价差 (A-B)",
                     value=f"{spread:+.2f}%",
@@ -100,13 +140,24 @@ while True:
 
             # 使用侧边栏设置的动态阈值
             if abs(spread) >= threshold:
+                alert_msg = ""
                 # 触发报警：显示醒目的红色警告框
                 if spread > 0:
-                    st.error(f"🔥🔥 信号触发！卖出【{STOCK_A_NAME}】，买入【{STOCK_B_NAME}】")
-                    st.markdown(f"**当前价差 {spread:.2f}% > 阈值 {threshold}%**")
+                    alert_msg = f"卖出【{STOCK_A_NAME}】，买入【{STOCK_B_NAME}】\n价差 {spread:.2f}% > {threshold}%"
+                    st.error(f"🔥🔥 信号触发！{alert_msg}")
                 else:
-                    st.error(f"🔥🔥 信号触发！卖出【{STOCK_B_NAME}】，买入【{STOCK_A_NAME}】")
-                    st.markdown(f"**当前价差 {abs(spread):.2f}% > 阈值 {threshold}%**")
+                    alert_msg = f"卖出【{STOCK_B_NAME}】，买入【{STOCK_A_NAME}】\n价差 {abs(spread):.2f}% > {threshold}%"
+                    st.error(f"🔥🔥 信号触发！{alert_msg}")
+                
+                # --- 推送逻辑 ---
+                current_timestamp = time.time()
+                if current_timestamp - st.session_state.last_alert_time > ALERT_COOLDOWN:
+                    send_notification("配对交易信号触发", alert_msg)
+                    st.session_state.last_alert_time = current_timestamp
+                    st.toast("🚀 已触发自动推送", icon="✅")
+                else:
+                    remaining = int(ALERT_COOLDOWN - (current_timestamp - st.session_state.last_alert_time))
+                    st.caption(f"🔔 报警冷却中，剩余 {remaining} 秒")
 
             else:
                 # 正常状态
