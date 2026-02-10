@@ -1,0 +1,15 @@
+name: Keep Alive
+
+on:
+  schedule:
+    # UTC 22:00 = BJ 06:00 (Next Day)
+    # UTC 09:00 = BJ 17:00
+    - cron: '0 9,22 * * *'
+  workflow_dispatch:
+
+jobs:
+  wake-up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake up Streamlit App
+        run: curl -I https://zs-monitor-zs.streamlit.app/
