@@ -5,6 +5,8 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta
 
+import json
+
 # ================= 配置区域 =================
 STOCK_A_CODE = "sh600036"
 STOCK_A_NAME = "招商银行"
@@ -14,6 +16,7 @@ STOCK_B_NAME = "宁波银行"
 
 REFRESH_RATE = 3       # 刷新间隔 (秒)
 ALERT_COOLDOWN = 300   # 报警冷却时间 (秒)
+CONFIG_FILE = "monitor_config.json" # 配置文件路径
 # ===========================================
 
 # 设置页面标题和布局
@@ -22,6 +25,33 @@ st.set_page_config(page_title="配对交易监控", page_icon="📈", layout="ce
 # --- 初始化 Session State ---
 if 'last_alert_time' not in st.session_state:
     st.session_state.last_alert_time = 0
+
+# --- 配置文件管理 ---
+def load_config():
+    default_config = {
+        "ratio_mean": 1.330,
+        "ratio_std": 0.015,
+        "z_threshold": 2.4
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return {**default_config, **json.load(f)}
+        except:
+            pass
+    return default_config
+
+def save_config():
+    config = {
+        "ratio_mean": st.session_state.ratio_mean,
+        "ratio_std": st.session_state.ratio_std,
+        "z_threshold": st.session_state.z_threshold
+    }
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f)
+    except Exception as e:
+        st.error(f"保存配置失败: {e}")
 
 # --- 通知功能 ---
 def load_secrets():
@@ -81,15 +111,39 @@ def get_realtime_data():
         return None
 
 # --- 侧边栏配置 ---
+config = load_config() # 加载配置
+
 with st.sidebar:
     st.header("⚙️ 监控设置")
     
     st.subheader("📊 历史统计参数")
-    ratio_mean = st.number_input("Ratio 40日均值 (Mean)", value=1.330, step=0.001, format="%.3f")
-    ratio_std = st.number_input("Ratio 40日标准差 (Std)", value=0.015, step=0.001, format="%.3f")
+    # 使用 key 和 on_change 实现双向绑定和持久化
+    ratio_mean = st.number_input(
+        "Ratio 40日均值 (Mean)", 
+        value=config["ratio_mean"], 
+        step=0.001, 
+        format="%.3f",
+        key="ratio_mean",
+        on_change=save_config
+    )
+    ratio_std = st.number_input(
+        "Ratio 40日标准差 (Std)", 
+        value=config["ratio_std"], 
+        step=0.001, 
+        format="%.3f",
+        key="ratio_std",
+        on_change=save_config
+    )
     
     st.subheader("⚡ 交易触发参数")
-    z_threshold = st.slider("开仓阈值 (倍标准差)", 1.5, 3.0, 2.4, 0.1)
+    z_threshold = st.slider(
+        "开仓阈值 (倍标准差)", 
+        1.5, 3.0, 
+        config["z_threshold"], 
+        0.1,
+        key="z_threshold",
+        on_change=save_config
+    )
     
     auto_refresh = st.checkbox("开启自动刷新", value=True)
     st.info("数据来源：新浪财经 (延迟约3秒)")
