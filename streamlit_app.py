@@ -141,6 +141,12 @@ while True:
             price_a = data['A']['price']
             price_b = data['B']['price']
             
+            # 【新增】防除零崩溃机制
+            if price_b <= 0 or price_a <= 0:
+                st.error("⚠️ 获取到异常价格 (为0)，可能接口故障或停牌，暂停本次计算！")
+                time.sleep(REFRESH_RATE)
+                continue
+
             # 核心计算
             current_ratio = price_a / price_b
             z_score = (current_ratio - ratio_mean) / ratio_std
@@ -180,7 +186,14 @@ while True:
             
             # --- 级别 A: 熔断防爆死 ---
             if abs_z > 3.5:
-                st.error(f"⛔ 熔断报警：两只股票关系出现极端异常 (Z-Score: {z_score:.2f})！暂停开仓。")
+                alert_msg = f"⛔ 熔断报警：出现极端异常 (Z-Score: {z_score:.2f})！请立刻停止任何开仓，检查基本面！"
+                st.error(alert_msg)
+                
+                # 熔断也必须推送！
+                current_timestamp = time.time()
+                if current_timestamp - st.session_state.last_alert_time > ALERT_COOLDOWN:
+                    send_notification("🚨 紧急熔断报警", alert_msg)
+                    st.session_state.last_alert_time = current_timestamp
             
             # --- 级别 B: 开仓信号 ---
             elif abs_z > z_threshold:
