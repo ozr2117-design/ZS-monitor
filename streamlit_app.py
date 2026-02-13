@@ -12,7 +12,6 @@ STOCK_A_NAME = "招商银行"
 STOCK_B_CODE = "sz002142"
 STOCK_B_NAME = "宁波银行"
 
-SPREAD_THRESHOLD = 1.0 # 报警阈值 1%
 REFRESH_RATE = 3       # 刷新间隔 (秒)
 ALERT_COOLDOWN = 300   # 报警冷却时间 (秒)
 # ===========================================
@@ -76,9 +75,7 @@ def get_realtime_data():
                 elements = line.split('=')[1].strip('";').split(',')
                 if len(elements) > 30:
                     current = float(elements[3])
-                    pre_close = float(elements[2])
-                    pct = (current - pre_close) / pre_close * 100
-                    data[code] = {'price': current, 'pct': pct}
+                    data[code] = {'price': current}
         return data
     except:
         return None
@@ -86,7 +83,14 @@ def get_realtime_data():
 # --- 侧边栏配置 ---
 with st.sidebar:
     st.header("⚙️ 监控设置")
-    threshold = st.slider("报警阈值 (%)", 0.5, 3.0, 1.0, 0.1)
+    
+    st.subheader("📊 历史统计参数")
+    ratio_mean = st.number_input("Ratio 40日均值 (Mean)", value=1.330, step=0.001, format="%.3f")
+    ratio_std = st.number_input("Ratio 40日标准差 (Std)", value=0.015, step=0.001, format="%.3f")
+    
+    st.subheader("⚡ 交易触发参数")
+    z_threshold = st.slider("开仓阈值 (倍标准差)", 1.5, 3.0, 2.4, 0.1)
+    
     auto_refresh = st.checkbox("开启自动刷新", value=True)
     st.info("数据来源：新浪财经 (延迟约3秒)")
     st.caption(f"报警冷却: {ALERT_COOLDOWN}秒")
@@ -111,7 +115,7 @@ def is_trading_time(dt):
            (afternoon_start <= current_time <= afternoon_end)
 
 # --- 主界面 ---
-st.title("📈 银行股配对监控")
+st.title("📈 银行股配对监控 (Z-Score)")
 
 # 创建占位符容器，用于动态更新内容
 main_container = st.empty()
@@ -134,7 +138,17 @@ while True:
         st.caption(status_text)
 
         if data and 'A' in data and 'B' in data:
-            spread = data['A']['pct'] - data['B']['pct']
+            price_a = data['A']['price']
+            price_b = data['B']['price']
+            
+            # 核心计算
+            current_ratio = price_a / price_b
+            z_score = (current_ratio - ratio_mean) / ratio_std
+            
+            # Data validation to prevent division by zero or errors
+            if ratio_std == 0:
+                z_score = 0
+                st.error("标准差不能为0，请检查侧边栏设置！")
 
             # 2. 核心指标卡片 (三列布局)
             col1, col2, col3 = st.columns(3)
@@ -142,38 +156,43 @@ while True:
             with col1:
                 st.metric(
                     label=STOCK_A_NAME,
-                    value=f"¥{data['A']['price']:.2f}",
-                    delta=f"{data['A']['pct']:.2f}%"
+                    value=f"¥{price_a:.2f}",
                 )
 
             with col2:
-                # 价差卡片
+                # Ratio / Z-Score 卡片
                 st.metric(
-                    label="当前价差 (A-B)",
-                    value=f"{spread:+.2f}%",
-                    delta_color="off"
+                    label="当前比价 Ratio (A/B)",
+                    value=f"{current_ratio:.4f}",
+                    delta=f"Z: {z_score:.2f}σ"
                 )
 
             with col3:
                 st.metric(
                     label=STOCK_B_NAME,
-                    value=f"¥{data['B']['price']:.2f}",
-                    delta=f"{data['B']['pct']:.2f}%"
+                    value=f"¥{price_b:.2f}",
                 )
 
-            # 3. 报警逻辑
+            # 3. 信号判定逻辑
             st.divider()
-
-            # 使用侧边栏设置的动态阈值
-            if abs(spread) >= threshold:
+            
+            abs_z = abs(z_score)
+            
+            # --- 级别 A: 熔断防爆死 ---
+            if abs_z > 3.5:
+                st.error(f"⛔ 熔断报警：两只股票关系出现极端异常 (Z-Score: {z_score:.2f})！暂停开仓。")
+            
+            # --- 级别 B: 开仓信号 ---
+            elif abs_z > z_threshold:
                 alert_msg = ""
-                # 触发报警：显示醒目的红色警告框
-                if spread > 0:
-                    alert_msg = f"卖出【{STOCK_A_NAME}】，买入【{STOCK_B_NAME}】\n价差 {spread:.2f}% > {threshold}%"
-                    st.error(f"🔥🔥 信号触发！{alert_msg}")
+                # 如果 Z-Score > 阈值，说明 Ratio 只有过高，A 贵 B 便宜 -> 卖 A 买 B
+                if z_score > 0:
+                    alert_msg = f"🔴 卖强买弱信号触发：卖出{STOCK_A_NAME}，买入{STOCK_B_NAME} (Z: {z_score:.2f} > {z_threshold})"
+                    st.error(alert_msg)
+                # 如果 Z-Score < -阈值，说明 Ratio 过低，A 便宜 B 贵 -> 买 A 卖 B
                 else:
-                    alert_msg = f"卖出【{STOCK_B_NAME}】，买入【{STOCK_A_NAME}】\n价差 {abs(spread):.2f}% > {threshold}%"
-                    st.error(f"🔥🔥 信号触发！{alert_msg}")
+                    alert_msg = f"🟢 卖弱买强信号触发：卖出{STOCK_B_NAME}，买入{STOCK_A_NAME} (Z: {z_score:.2f} < -{z_threshold})"
+                    st.error(alert_msg)
                 
                 # --- 推送逻辑 ---
                 current_timestamp = time.time()
@@ -184,17 +203,33 @@ while True:
                 else:
                     remaining = int(ALERT_COOLDOWN - (current_timestamp - st.session_state.last_alert_time))
                     st.caption(f"🔔 报警冷却中，剩余 {remaining} 秒")
-
+            
+            # --- 级别 C: 平仓区域 ---
+            elif abs_z < 0.2:
+                st.success(f"✅ 均值回归：当前比价已回归正常范围 (Z: {z_score:.2f})，若是持仓中可考虑获利平仓。")
+            
+            # --- 级别 D: 正常观望 ---
             else:
-                # 正常状态
-                st.success(f"✅ 波动正常，安心持股 (当前价差 < 阈值 {threshold}%)")
+                 st.info(f"⚓ 波动正常，持仓观望 (Z: {z_score:.2f})。")
 
-                # 显示一个简单的柱状图辅助观察
-                chart_data = pd.DataFrame({
-                    '股票名称': [STOCK_A_NAME, STOCK_B_NAME],
-                    '今日涨跌幅(%)': [data['A']['pct'], data['B']['pct']]
-                })
-                st.bar_chart(chart_data.set_index('股票名称'))
+            # 4. 图表优化：Z-Score 仪表盘
+            # 创建一个简单的 DataFrame用于展示 Z-Score 相对于阈值的位置
+            # 这里的可视化使用简单的 progress chart 或者 metric 可能会比较抽象，
+            # 使用 altair 或者简单的 st.progress 可能更好，但 st.progress 只能 0-100。
+            # 这里我们用一个水平的 bar chart 来模拟 0 轴在中间的效果，或者直接用 metric。
+            # 为了直观，我们还是用 bar_chart，但是构造数据让它围绕 0 上下波动
+            
+            chart_df = pd.DataFrame({
+                'Index': ['Z-Score'],
+                'Value': [z_score]
+            })
+            
+            # 添加阈值辅助线 (通过 hack 图表或者简单展示)
+            # 由于 Streamlit 原生 chart 简单，我们直接画一个值
+            st.write("##### Z-Score 偏离度监控")
+            st.bar_chart(chart_df.set_index('Index'), color="#FF4B4B" if abs_z > z_threshold else "#4BFF4B")
+            
+            st.caption(f"开仓阈值区间: [-{z_threshold}, +{z_threshold}]")
 
         elif not is_trading_time(now_dt):
             st.info("😴 当前非交易时间，暂停数据更新")
